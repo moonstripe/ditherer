@@ -24,7 +24,46 @@ struct DithererArgs {
         help = "Preserve colors using brightness channel dithering"
     )]
     color: bool,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PRESERVE_ORDER",
+        help = "Whether to preserve color in 'dark' or 'light' pixels."
+    )]
+    preserve_order: PreserveOrder,
 }
+
+#[derive(Clone, Debug)]
+enum PreserveOrder {
+    Dark,
+    Light,
+}
+
+impl FromStr for PreserveOrder {
+    type Err = PreserveOrderParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.to_lowercase().as_str() {
+            "dark" => Ok(PreserveOrder::Dark),
+            "light" => Ok(PreserveOrder::Light),
+            _ => Err(PreserveOrderParseError),
+        }
+    }
+}
+#[derive(Debug)]
+struct PreserveOrderParseError;
+
+impl fmt::Display for PreserveOrderParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Invalid preserve order option. Choose from: dark, light."
+        )
+    }
+}
+
+impl Error for PreserveOrderParseError {}
 
 #[derive(Clone, Debug)]
 enum BayerMatrixOption {
@@ -107,6 +146,7 @@ fn apply_bayer_dithering_grayscale(
 fn apply_bayer_dithering_color(
     image: &DynamicImage,
     bayer_option: BayerMatrixOption,
+    preserve_order: PreserveOrder,
 ) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
     let (width, height) = image.dimensions();
 
@@ -125,8 +165,22 @@ fn apply_bayer_dithering_color(
 
             let index = ((y % matrix_size) * matrix_size + (x % matrix_size)) as usize;
             let threshold = bayer_matrix[index];
-
-            let new_intensity = if intensity > threshold { 255 } else { 0 };
+            let new_intensity = match preserve_order {
+                PreserveOrder::Light => {
+                    if intensity > threshold {
+                        255
+                    } else {
+                        0
+                    }
+                }
+                PreserveOrder::Dark => {
+                    if intensity > threshold {
+                        0
+                    } else {
+                        255
+                    }
+                }
+            };
 
             output_image.put_pixel(x, y, Rgba([pixel[0], pixel[1], pixel[2], new_intensity]));
         }
@@ -147,7 +201,8 @@ fn main() {
     let image = image::open(&input_path).expect("Failed to open input image");
 
     if args.color {
-        let dithered_image = apply_bayer_dithering_color(&image, option);
+        let preserve_order = args.preserve_order;
+        let dithered_image = apply_bayer_dithering_color(&image, option, preserve_order);
         dithered_image
             .save(&output_path)
             .expect("Failed to save color dithered image");
