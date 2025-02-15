@@ -1,18 +1,21 @@
 use clap::{arg, command, Parser};
-use image::{DynamicImage, GenericImageView, GrayImage, ImageBuffer, Luma, Rgba};
+use image::{
+    DynamicImage, GenericImageView, GrayImage, ImageBuffer, ImageEncoder, ImageReader, Luma, Rgba,
+};
 use std::error::Error;
 use std::fmt;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct DithererArgs {
-    #[arg(short, long, value_name = "INPUT_IMG")]
-    input_path: PathBuf,
+    #[arg(short = 'i', long, value_name = "INPUT_IMG")]
+    input: Option<PathBuf>,
 
-    #[arg(short, long, value_name = "OUTPUT_IMG")]
-    output_path: Option<PathBuf>,
+    #[arg(short = 'o', long, value_name = "OUTPUT_IMG")]
+    output: Option<PathBuf>,
 
     #[arg(short, long, value_name = "MATRIX_SIZE")]
     matrix_size: BayerMatrixOption,
@@ -20,7 +23,6 @@ struct DithererArgs {
     #[arg(
         short,
         long,
-        value_name = "PRESERVE_COLOR",
         help = "Preserve colors using brightness channel dithering"
     )]
     color: bool,
@@ -29,9 +31,9 @@ struct DithererArgs {
         short,
         long,
         value_name = "PRESERVE_ORDER",
-        help = "Whether to preserve color in 'dark' or 'light' pixels."
+        help = "Preserve order in 'dark' or 'light' pixels"
     )]
-    preserve_order: PreserveOrder,
+    preserve_order: Option<PreserveOrder>,
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +109,51 @@ const BAYER_MATRIX_8X8: [u8; 64] = [
     128, 160, 96,
 ];
 
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = DithererArgs::parse();
+
+    let image = if let Some(input_path) = args.input {
+        ImageReader::open(input_path)?.decode()?
+    } else {
+        let mut buffer = Vec::new();
+        std::io::stdin().lock().read_to_end(&mut buffer)?;
+        image::load_from_memory(&buffer)?
+    };
+
+    let dithered_image = if args.color {
+        let preserve_order = args.preserve_order.unwrap_or(PreserveOrder::Dark);
+        apply_bayer_dithering_color(&image, args.matrix_size, preserve_order)
+    } else {
+        luma_to_rgba8(&apply_bayer_dithering_grayscale(&image, args.matrix_size))
+    };
+
+    if let Some(output_path) = args.output {
+        dithered_image.save(output_path)?;
+    } else {
+        let mut stdout = std::io::stdout();
+        let encoder = image::codecs::png::PngEncoder::new(&mut stdout);
+        encoder.write_image(
+            &dithered_image,
+            dithered_image.width(),
+            dithered_image.height(),
+            image::ExtendedColorType::Rgba8,
+        )?;
+        stdout.flush()?;
+    }
+
+    Ok(())
+}
+fn luma_to_rgba8(luma_img: &ImageBuffer<Luma<u8>, Vec<u8>>) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+    let (width, height) = luma_img.dimensions();
+    let mut rgba_img = ImageBuffer::new(width, height);
+
+    for (x, y, luma_pixel) in luma_img.enumerate_pixels() {
+        let luma_value = luma_pixel.0[0];
+        rgba_img.put_pixel(x, y, Rgba([luma_value, luma_value, luma_value, 255]));
+    }
+
+    rgba_img
+}
 fn compute_luminance(pixel: &[u8; 3]) -> u8 {
     (0.299 * pixel[0] as f64 + 0.587 * pixel[1] as f64 + 0.114 * pixel[2] as f64).clamp(0.0, 255.0)
         as u8
@@ -115,7 +162,7 @@ fn compute_luminance(pixel: &[u8; 3]) -> u8 {
 fn apply_bayer_dithering_grayscale(
     image: &DynamicImage,
     bayer_option: BayerMatrixOption,
-) -> GrayImage {
+) -> ImageBuffer<Luma<u8>, Vec<u8>> {
     let gray_image = image.to_luma8();
     let (width, height) = gray_image.dimensions();
 
@@ -187,31 +234,4 @@ fn apply_bayer_dithering_color(
     }
 
     output_image
-}
-
-fn main() {
-    let args = DithererArgs::parse();
-
-    let input_path = args.input_path;
-    let output_path = args
-        .output_path
-        .unwrap_or_else(|| PathBuf::from("dithered_image.png"));
-
-    let option = args.matrix_size;
-    let image = image::open(&input_path).expect("Failed to open input image");
-
-    if args.color {
-        let preserve_order = args.preserve_order;
-        let dithered_image = apply_bayer_dithering_color(&image, option, preserve_order);
-        dithered_image
-            .save(&output_path)
-            .expect("Failed to save color dithered image");
-    } else {
-        let dithered_image = apply_bayer_dithering_grayscale(&image, option);
-        dithered_image
-            .save(&output_path)
-            .expect("Failed to save grayscale dithered image");
-    }
-
-    println!("Dithered image saved to {:?}", output_path);
 }
