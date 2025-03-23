@@ -1,7 +1,9 @@
 [package]
 name = "ditherer"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
+description = "Fun little Bayer matrix ditherer in Rust."
+license = "MIT"
 
 [dependencies]
 clap = { version = "4.5.26", features = ["derive"] }
