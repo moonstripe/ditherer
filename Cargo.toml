@@ -1,6 +1,6 @@
 [package]
 name = "ditherer"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Fun little Bayer matrix ditherer in Rust."
 license = "MIT"
